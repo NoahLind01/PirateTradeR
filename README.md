@@ -1,6 +1,6 @@
-**Pirate Trade Network**
+**Pirate Trade R**
 
-Pirate Trade Network is an interactive R Shiny dashboard built to simulate a dynamic, living economy for tabletop RPGs and pirate-themed D&D campaigns. It tracks the supply, demand, and fluctuating prices of various maritime commodities across a 3x3 grid of interconnected regions and 36 distinct merchants. Designed as a tool for Dungeon Masters, the app automatically calculates localized price shifts based on player trades, propagates economic "ripples" to adjacent islands over time, and features built-in God-tools to trigger random market crashes, lucrative shortages, and natural seasonal price cycles.
+Pirate Trade Rrrrrr is an interactive R Shiny dashboard built to simulate a dynamic, living economy for tabletop RPGs and pirate-themed D&D campaigns. It tracks the supply, demand, and fluctuating prices of various maritime commodities across a 3x3 grid of interconnected regions and 36 distinct merchants. Designed as a tool for Dungeon Masters, the app automatically calculates localized price shifts based on player trades, propagates economic "ripples" to adjacent islands over time, and features built-in God-tools to trigger random market crashes, lucrative shortages, and natural seasonal price cycles.
 
 
 **Features**
