@@ -13,7 +13,7 @@ Pirate Trade Network is an interactive R Shiny dashboard built to simulate a dyn
 
     Volume Sensitivity: The central map (2,2) is a highly volatile hub where even small trades move the needle. Corner maps represent deep, established markets requiring bulk crate trades to shift prices.
 
-    DM "God-Tools": Instantly trigger global or localized "Shortages" or "Surpluses" with the click of a button to throw the players a curveball.
+    DM "God-Tools": Instantly trigger global or localized "Shortages" or "Surpluses" with the click of a button to throw the players a curveball. There is a 10% chance for a world-wide global event, and a 90% chance it targets a specific cluster of 3 interconnected map regions (like rows, columns, or L-shaped trade routes).
 
     State Persistence: Save and load the entire state of your world's economy to a local CSV file between sessions.
 
