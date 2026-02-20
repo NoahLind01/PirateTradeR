@@ -352,14 +352,14 @@ server <- function(input, output, session) {
   observeEvent(input$btn_short, { trigger_event("shortage") })
   observeEvent(input$btn_surp, { trigger_event("surplus") })
   
-  trigger_event <- function(event_type) {
+    trigger_event <- function(event_type) {
     df <- market_data()
     comms <- unique(df$commodity)
     target_comm <- sample(comms, 1)
     
-    # 50% chance it's global, 50% chance it's a specific row (Y coordinate)
-    scope_is_global <- sample(c(TRUE, FALSE), 1)
-    target_y <- sample(1:3, 1)
+    # Configurable chance for a global event (10% by default)
+    global_event_chance <- 0.10
+    scope_is_global <- runif(1) <= global_event_chance
     
     if(event_type == "shortage") {
       multiplier <- runif(1, 1.8, 3.0) # Prices jump 80% to 200%
@@ -370,8 +370,26 @@ server <- function(input, output, session) {
     }
     
     if(!scope_is_global) {
-      msg <- paste(msg, "(Confined to Map Row", target_y, ")")
-      idx <- which(df$commodity == target_comm & df$y == target_y)
+      # Define clusters of 3 contiguous, non-diagonal map sections
+      # Grid layout:
+      # 1 2 3
+      # 4 5 6
+      # 7 8 9
+      regional_clusters <- list(
+        "Northern Row" = c(1, 2, 3), "Central Row" = c(4, 5, 6), "Southern Row" = c(7, 8, 9),
+        "Western Col" = c(1, 4, 7), "Central Col" = c(2, 5, 8), "Eastern Col" = c(3, 6, 9),
+        "Northwest Corner" = c(1, 2, 4), "Northeast Corner" = c(2, 3, 6),
+        "Southwest Corner" = c(4, 7, 8), "Southeast Corner" = c(6, 8, 9),
+        "Inner Northwest" = c(2, 4, 5), "Inner Northeast" = c(2, 5, 6),
+        "Inner Southwest" = c(4, 5, 8), "Inner Southeast" = c(5, 6, 8)
+      )
+      
+      # Select a random cluster
+      cluster_name <- sample(names(regional_clusters), 1)
+      target_maps <- regional_clusters[[cluster_name]]
+      
+      msg <- paste(msg, "(Confined to", cluster_name, "- Maps", paste(target_maps, collapse=", "), ")")
+      idx <- which(df$commodity == target_comm & df$map_id %in% target_maps)
     } else {
       msg <- paste(msg, "(Global Event)")
       idx <- which(df$commodity == target_comm)
@@ -383,6 +401,7 @@ server <- function(input, output, session) {
     # Show big persistent notification to DM
     showNotification(msg, type = ifelse(event_type=="shortage", "error", "message"), duration = 10)
   }
+
   
   # Save / Load CSV
   observeEvent(input$btn_save, {
