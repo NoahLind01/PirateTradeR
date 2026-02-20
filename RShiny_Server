@@ -1,0 +1,529 @@
+# Install required packages if you don't have them:
+# install.packages(c("shiny", "shinydashboard", "dplyr", "tidyr", "DT", "readr", "plotly"))
+# Written by Noah Lind, Jan 2026
+
+library(shiny)
+library(shinydashboard)
+library(dplyr)
+library(tidyr)
+library(DT)
+library(readr)
+library(plotly)
+
+# --- 1. INITIAL DATA GENERATION ---
+generate_initial_market <- function() {
+  commodities <- c('rum', 'oil', 'pearls', 'fish', 'crabs', 'salt')
+  base_prices <- c(20, 10, 50, 5, 7, 30)
+  
+  # 9 Maps (3x3 Grid) -> Map 5 is the center
+  merchant_names <- list(
+    c('The Nautical Nook', 'The Sandy Souk', 'Trench\'s Treasures', 'The Seafarer\'s Stockpile'), # Map 1 (1,1)
+    c('Barnacle\'s Bounty', 'The Mariner\'s Must-Haves', 'Wave Whisperer Wares', 'Seabreeze Sundries'), # Map 2 (1,2)
+    c('Anchor\'s Away Antiques', 'Siren\'s Song Supplies', 'Quay Corner Collectibles', 'Voyager\'s Variety'), # Map 3 (1,3)
+    c('Mast & Mooring', 'Tidal Treasures Emporium', 'Coral Cache Curiosities', 'Sailor\'s Stopover Store'), # Map 4 (2,1)
+    c('The Black Spot Barter', 'Crossbones Commodities', 'Dead Man\'s Dealings', 'The Rusty Cutlass'), # Map 5 (2,2) - NEW CENTER
+    c('Kraken\'s Keepsakes', 'Portside Provisions Post', 'Shipshape Sundries', 'Galleon\'s Glory Goods'), # Map 6 (2,3)
+    c('The Salty Peddler', 'Deck & Dock Depot', 'Mermaid\'s Miscellany Mart', 'Compass & Canvas Co-op'), # Map 7 (3,1)
+    c('Jib & Jig General Store', 'Rigging\'s Relic Room', 'Nautical Novelties Nook', 'Windward Wonders'), # Map 8 (3,2)
+    c('The Helm & Haul', 'Buccaneer\'s Booty Bazaar', 'Starboard Stash', 'Capstan\'s Curated') # Map 9 (3,3)
+  )
+  
+  df_list <- list()
+  row_idx <- 1
+  
+  for (map_id in 1:9) {
+    # Calculate grid coordinates (1,1 to 3,3)
+    x_coord <- ((map_id - 1) %% 3) + 1
+    y_coord <- floor((map_id - 1) / 3) + 1
+    
+    # Determine economic sensitivity based on distance from center (2,2)
+    # Center = high sensitivity (0.01). Cross = med (0.0025). Corners = low (0.001)
+    dist_from_center <- abs(x_coord - 2) + abs(y_coord - 2)
+    sensitivity <- ifelse(dist_from_center == 0, 0.01, 
+                          ifelse(dist_from_center == 1, 0.0025, 0.001))
+    
+    for (merch_id in 1:4) {
+      for (c_idx in seq_along(commodities)) {
+        # Initial random variance (-10% to +10%)
+        variance <- runif(1, min = -0.1, max = 0.1)
+        start_price <- max(1, round(base_prices[c_idx] * (1 + variance), 2))
+        
+        df_list[[row_idx]] <- data.frame(
+          map_id = map_id,
+          x = x_coord,
+          y = y_coord,
+          merchant_id = merch_id,
+          merchant_name = merchant_names[[map_id]][merch_id],
+          commodity = commodities[c_idx],
+          base_price = base_prices[c_idx],
+          current_price = start_price,
+          daily_delta = 0,   # Tracks changes for same-map daily ripple
+          weekly_delta = 0,  # Tracks changes for adjacent-map weekly ripple
+          sensitivity = sensitivity,
+          current_day = 0,                 # Tracks passage of time for cycles
+          cycle_period = runif(1, 14, 60), # Natural market cycle length (14 to 60 days)
+          cycle_phase = runif(1, 0, 2*pi), # Random starting phase of the sine wave
+          stringsAsFactors = FALSE
+        )
+        row_idx <- row_idx + 1
+      }
+    }
+  }
+  return(bind_rows(df_list))
+}
+
+
+# --- 2. UI DEFINITION ---
+ui <- dashboardPage(
+  skin = "red",
+  dashboardHeader(title = "Pirate Trade Network",
+                  tags$li(class = "dropdown",
+                          actionButton("btn_dark", "Toggle Dark Mode", icon = icon("moon"), 
+                                       style = "margin: 8px 15px 0 0; color: #fff; background-color: #222; border: none;")
+                  )
+  ),
+  
+  dashboardSidebar(
+    h4(" The Helm", style="color:white; padding-left:15px;"),
+    selectInput("sel_map", "Map Region (1-9):", choices = 1:9, selected = 5),
+    uiOutput("merch_selector"),
+    selectInput("sel_comm", "Commodity:", choices = c('rum', 'oil', 'pearls', 'fish', 'crabs', 'salt')),
+    numericInput("qty", "Quantity to Trade:", value = 1, min = 1),
+    
+    fluidRow(
+      column(5, actionButton("btn_prev_buy", "P. Buy", class = "btn-info", width = "100%", style="margin-bottom: 5px;")),
+      column(5, actionButton("btn_prev_sell", "P. Sell", class = "btn-warning", width = "100%", style="margin-bottom: 5px;"))
+    ),
+    fluidRow(
+      column(5, actionButton("btn_buy", "BUY (-)", class = "btn-success", width = "100%")),
+      column(5, actionButton("btn_sell", "SELL (+)", class = "btn-danger", width = "100%"))
+    ),
+    br(),
+    
+    h4(" Time & Tides", style="color:white; padding-left:15px;"),
+    actionButton("btn_day", "Advance Day", icon = icon("sun"), width = "85%", style="margin: 5px 15px;"),
+    actionButton("btn_week", "Advance Week", icon = icon("calendar"), width = "85%", style="margin: 5px 15px;"),
+    br(),
+    
+    h4(" DM God-Tools", style="color:white; padding-left:15px;"),
+    fluidRow(
+      column(5, actionButton("btn_short", "Shortage!", class = "btn-warning", width = "100%")),
+      column(5, actionButton("btn_surp", "Surplus!", class = "btn-primary", width = "100%"))
+    ),
+    br(),
+    
+    h4(" Ledger", style="color:white; padding-left:15px;"),
+    actionButton("btn_save", "Save State to CSV", icon = icon("save"), width = "85%", style="margin: 5px 15px;"),
+    actionButton("btn_load", "Load State from CSV", icon = icon("folder-open"), width = "85%", style="margin: 5px 15px;")
+  ),
+  
+  dashboardBody(
+    tags$head(
+      tags$script(HTML("
+        $(document).ready(function() {
+          $('#btn_dark').on('click', function() {
+            $('body').toggleClass('dark-mode');
+            // Send signal to Shiny server about dark mode status for Plotly
+            Shiny.setInputValue('dark_mode', $('body').hasClass('dark-mode'));
+          });
+        });
+      ")),
+      tags$style(HTML("
+      .grid-box { text-align: center; padding: 20px; border: 2px solid #333; border-radius: 5px; background-color: #f4f4f4; margin-bottom: 15px;}
+      .grid-box h3 { margin-top: 0; font-weight: bold; }
+      .grid-center { border: 3px solid #d9534f; background-color: #fdf5f5; }
+      
+      /* Dark Mode Styles */
+      body.dark-mode .content-wrapper, body.dark-mode .right-side { background-color: #2c2c2c; color: #eee; }
+      body.dark-mode .box { background-color: #3c3c3c; color: #eee; border-top-color: #d9534f; }
+      body.dark-mode .box-header { color: #eee; }
+      body.dark-mode .grid-box { background-color: #444; border-color: #666; color: #eee; }
+      body.dark-mode .grid-center { background-color: #4a2b2b; border-color: #d9534f; }
+      body.dark-mode table.dataTable tbody tr { background-color: #3c3c3c; color: #eee; }
+      body.dark-mode table.dataTable thead th, body.dark-mode table.dataTable thead td { color: #eee; border-bottom-color: #555; }
+      body.dark-mode table.dataTable.no-footer { border-bottom-color: #555; }
+      body.dark-mode .dataTables_wrapper label { color: #eee; }
+      body.dark-mode .dataTables_info { color: #eee !important; }
+      body.dark-mode .dataTables_wrapper .dataTables_paginate .paginate_button { color: #eee !important; }
+    "))),
+    
+    fluidRow(
+      column(8, 
+             h3(textOutput("grid_title")),
+             uiOutput("map_grid") # Dynamically rendered 3x3 grid
+      ),
+      column(4,
+             h3("Transaction Rules"),
+             p(strong("Buying:"), "Players buy from vendor. Vendor supply drops. Prices go UP."),
+             p(strong("Selling:"), "Players sell to vendor. Vendor supply rises. Prices go DOWN."),
+             p(strong("Center Map 5"), "Highly volatile. Small trades move prices."),
+             p(strong("Corner Maps:"), "Deep markets. Requires bulk crates to move prices."),
+             p(strong("Advance Day:"), "Ripples vendor changes to other shops on the same island. Slight drift to base price."),
+             p(strong("Advance Week:"), "Ripples island economies to adjacent map squares. Moderate drift to base price.")
+      )
+    ),
+    
+    fluidRow(
+      column(12,
+             box(title = "Market Arbitrage Tracker", width = NULL, status = "primary", solidHeader = TRUE,
+                 plotlyOutput("price_chart", height = "350px"))
+      )
+    ),
+    
+    fluidRow(
+      column(12,
+             box(title = "Local Market Prices (Selected Map)", width = NULL, status = "danger", solidHeader = TRUE,
+                 DTOutput("market_table"))
+      )
+    )
+  )
+)
+
+# --- 3. SERVER LOGIC ---
+server <- function(input, output, session) {
+  
+  # Reactive main dataset
+  market_data <- reactiveVal(generate_initial_market())
+  
+  # Dynamic merchant selector based on map
+  output$merch_selector <- renderUI({
+    req(input$sel_map)
+    df <- market_data()
+    merchants <- df %>% filter(map_id == input$sel_map) %>% pull(merchant_name) %>% unique()
+    selectInput("sel_merch", "Merchant:", choices = merchants)
+  })
+  
+  # Transaction Logic (Buy/Sell/Preview)
+  observeEvent(input$btn_prev_buy, { preview_transaction("buy") })
+  observeEvent(input$btn_prev_sell, { preview_transaction("sell") })
+  observeEvent(input$btn_buy, { process_transaction("buy") })
+  observeEvent(input$btn_sell, { process_transaction("sell") })
+  
+  preview_transaction <- function(type) {
+    req(input$sel_map, input$sel_merch, input$sel_comm, input$qty)
+    
+    df <- market_data()
+    
+    # Locate specific record
+    idx <- which(df$map_id == input$sel_map & 
+                   df$merchant_name == input$sel_merch & 
+                   df$commodity == input$sel_comm)
+    
+    if(length(idx) == 1) {
+      current <- df$current_price[idx]
+      sens <- df$sensitivity[idx]
+      
+      # Buy = Price Up, Sell = Price Down
+      direction <- ifelse(type == "buy", 1, -1)
+      pct_change <- input$qty * sens * direction
+      
+      # Cap extreme single-transaction jumps to +/- 50%
+      pct_change <- max(min(pct_change, 0.50), -0.50)
+      
+      new_price <- max(1, current * (1 + pct_change))
+      total_gold <- round(current * input$qty, 2)
+      
+      if(type == "buy") {
+        msg <- paste0("PREVIEW BUY: ", input$qty, " ", toupper(input$sel_comm), 
+                      " costs ", total_gold, "g. (Price will rise to ", round(new_price, 2), "g)")
+      } else {
+        msg <- paste0("PREVIEW SELL: Selling ", input$qty, " ", toupper(input$sel_comm), 
+                      " yields ", total_gold, "g. (Price will drop to ", round(new_price, 2), "g)")
+      }
+      
+      showNotification(msg, type = "warning", duration = 8)
+    }
+  }
+  
+  process_transaction <- function(type) {
+    req(input$sel_map, input$sel_merch, input$sel_comm, input$qty)
+    
+    df <- market_data()
+    
+    # Locate specific record
+    idx <- which(df$map_id == input$sel_map & 
+                   df$merchant_name == input$sel_merch & 
+                   df$commodity == input$sel_comm)
+    
+    if(length(idx) == 1) {
+      current <- df$current_price[idx]
+      sens <- df$sensitivity[idx]
+      
+      # Buy = Price Up, Sell = Price Down
+      direction <- ifelse(type == "buy", 1, -1)
+      pct_change <- input$qty * sens * direction
+      
+      # Cap extreme single-transaction jumps to +/- 50%
+      pct_change <- max(min(pct_change, 0.50), -0.50)
+      
+      new_price <- max(1, current * (1 + pct_change))
+      actual_delta <- new_price - current
+      
+      # Update dataframe
+      df$current_price[idx] <- round(new_price, 2)
+      df$daily_delta[idx] <- df$daily_delta[idx] + actual_delta
+      df$weekly_delta[idx] <- df$weekly_delta[idx] + actual_delta
+      
+      market_data(df)
+      showNotification(paste("Trade executed. Price moved from", round(current, 2), "to", round(new_price, 2)), type = "message")
+    }
+  }
+  
+  # Advance Day Logic
+  observeEvent(input$btn_day, {
+    df <- market_data()
+    
+    # 1. Same-Map Ripple: Apply 25% of a vendor's daily price movement to other vendors in the same map
+    ripple_df <- df %>%
+      group_by(map_id, commodity) %>%
+      summarize(avg_daily_delta = mean(daily_delta), .groups = 'drop')
+    
+    df <- df %>%
+      left_join(ripple_df, by = c("map_id", "commodity")) %>%
+      mutate(
+        current_day = current_day + 1,
+        # Calculate dynamic target price based on a sine wave (+/- 20% natural swing)
+        dynamic_base = base_price * (1 + 0.20 * sin((2 * pi * current_day / cycle_period) + cycle_phase)),
+        # Apply 25% of the map's average delta to everyone, but don't double count the vendor who made the delta
+        current_price = pmax(1, current_price + (avg_daily_delta * 0.25)),
+        # Add a tiny bit of random noise (+/- 1%) to simulate organic market jitter
+        current_price = current_price * runif(n(), 0.99, 1.01),
+        # Mean Reversion: Drift 5% towards dynamic base price instead of static base
+        current_price = current_price + ((dynamic_base - current_price) * 0.05),
+        current_price = round(current_price, 2),
+        daily_delta = 0 # Reset daily ledger
+      ) %>%
+      select(-avg_daily_delta, -dynamic_base)
+    
+    market_data(df)
+    showNotification("Day advanced. Local rumors spread, prices drift slightly.", type = "default")
+  })
+  
+  # Advance Week Logic
+  observeEvent(input$btn_week, {
+    df <- market_data()
+    
+    # Calculate average weekly delta for each map square
+    map_summary <- df %>%
+      group_by(x, y, commodity) %>%
+      summarize(map_weekly_delta = mean(weekly_delta), .groups = 'drop')
+    
+    # Create an empty vector to store ripple effects
+    ripple_effects <- numeric(nrow(df))
+    
+    # For each row in the main df, look at adjacent maps
+    for (i in 1:nrow(df)) {
+      cx <- df$x[i]
+      cy <- df$y[i]
+      ccomm <- df$commodity[i]
+      
+      # Find adjacent maps (Cardinal directions: distance of 1)
+      adj_deltas <- map_summary %>%
+        filter(commodity == ccomm & (abs(x - cx) + abs(y - cy) == 1)) %>%
+        pull(map_weekly_delta)
+      
+      if(length(adj_deltas) > 0) {
+        # Apply 20% of the adjacent map's weekly delta to this map
+        ripple_effects[i] <- mean(adj_deltas) * 0.20
+      }
+    }
+    
+    # Apply changes and natural market drift
+    df <- df %>%
+      mutate(
+        current_day = current_day + 7,
+        current_price = pmax(1, current_price + ripple_effects),
+        # Calculate dynamic target price based on a sine wave (+/- 20% natural swing)
+        dynamic_base = base_price * (1 + 0.20 * sin((2 * pi * current_day / cycle_period) + cycle_phase)),
+        # Add slight random noise (+/- 3%) for weekly variations
+        current_price = current_price * runif(n(), 0.97, 1.03),
+        # Mean Reversion: Drift 15% towards dynamic base price weekly
+        current_price = current_price + ((dynamic_base - current_price) * 0.15),
+        current_price = round(current_price, 2),
+        weekly_delta = 0 # Reset weekly ledger
+      ) %>%
+      select(-dynamic_base)
+    
+    market_data(df)
+    showNotification("Week advanced. Merchant ships propagate price changes across the grid.", type = "default")
+  })
+  
+  # DM Events: Shortage & Surplus
+  observeEvent(input$btn_short, { trigger_event("shortage") })
+  observeEvent(input$btn_surp, { trigger_event("surplus") })
+  
+  trigger_event <- function(event_type) {
+    df <- market_data()
+    comms <- unique(df$commodity)
+    target_comm <- sample(comms, 1)
+    
+    # 50% chance it's global, 50% chance it's a specific row (Y coordinate)
+    scope_is_global <- sample(c(TRUE, FALSE), 1)
+    target_y <- sample(1:3, 1)
+    
+    if(event_type == "shortage") {
+      multiplier <- runif(1, 1.8, 3.0) # Prices jump 80% to 200%
+      msg <- paste("CRITICAL SHORTAGE of", toupper(target_comm), "!")
+    } else {
+      multiplier <- runif(1, 0.3, 0.6) # Prices drop to 30%-60% of current
+      msg <- paste("MASSIVE SURPLUS of", toupper(target_comm), "!")
+    }
+    
+    if(!scope_is_global) {
+      msg <- paste(msg, "(Confined to Map Row", target_y, ")")
+      idx <- which(df$commodity == target_comm & df$y == target_y)
+    } else {
+      msg <- paste(msg, "(Global Event)")
+      idx <- which(df$commodity == target_comm)
+    }
+    
+    df$current_price[idx] <- round(max(1, df$current_price[idx] * multiplier), 2)
+    market_data(df)
+    
+    # Show big persistent notification to DM
+    showNotification(msg, type = ifelse(event_type=="shortage", "error", "message"), duration = 10)
+  }
+  
+  # Save / Load CSV
+  observeEvent(input$btn_save, {
+    write_csv(market_data(), "pirate_economy.csv")
+    showNotification("World state saved to 'pirate_economy.csv'", type = "message")
+  })
+  
+  observeEvent(input$btn_load, {
+    if(file.exists("pirate_economy.csv")) {
+      market_data(read_csv("pirate_economy.csv", show_col_types = FALSE))
+      showNotification("World state loaded from CSV!", type = "message")
+    } else {
+      showNotification("No save file found.", type = "error")
+    }
+  })
+  
+  # --- UI RENDERING ---
+  
+  output$grid_title <- renderText({
+    paste("Regional Averages for:", toupper(input$sel_comm))
+  })
+  
+  output$map_grid <- renderUI({
+    df <- market_data()
+    req(input$sel_comm)
+    
+    # Calculate average price per map for the selected commodity
+    grid_data <- df %>%
+      filter(commodity == input$sel_comm) %>%
+      group_by(map_id, x, y) %>%
+      summarize(avg_p = round(mean(current_price), 2), .groups = 'drop') %>%
+      arrange(y, x)
+    
+    # Create HTML structure for 3x3
+    rows <- list()
+    for (row_y in 1:3) {
+      cols <- list()
+      for (col_x in 1:3) {
+        map_val <- grid_data %>% filter(x == col_x, y == row_y)
+        
+        # Highlight the center map and the currently selected map
+        box_class <- "grid-box"
+        if(col_x == 2 && row_y == 2) box_class <- paste(box_class, "grid-center")
+        
+        # Add visual indicator if this is the map selected in the sidebar
+        current_map_id <- (row_y - 1) * 3 + col_x
+        border_style <- if(current_map_id == as.numeric(input$sel_map)) "border-color: #0073b7; border-width: 4px;" else ""
+        
+        cols[[col_x]] <- column(4, 
+                                div(class = box_class, style = border_style,
+                                    h4(paste("Map", current_map_id)),
+                                    h3(paste0(map_val$avg_p, "g"))
+                                )
+        )
+      }
+      rows[[row_y]] <- fluidRow(cols)
+    }
+    
+    do.call(tagList, rows)
+  })
+  
+  # Arbitrage Plotly Chart
+  output$price_chart <- renderPlotly({
+    req(input$sel_map, input$sel_merch, input$sel_comm)
+    
+    df <- market_data() %>% filter(commodity == input$sel_comm)
+    sel_v <- df %>% filter(map_id == as.numeric(input$sel_map), merchant_name == input$sel_merch)
+    
+    req(nrow(sel_v) == 1)
+    target_price <- sel_v$current_price
+    
+    # Calculate Manhattan distance for sorting
+    df <- df %>% mutate(
+      dist = abs(x - sel_v$x) + abs(y - sel_v$y),
+      is_selected = (merchant_name == sel_v$merchant_name & map_id == sel_v$map_id)
+    )
+    
+    # Sort order: Selected (-1), same map (0), adjacent (1), etc.
+    df <- df %>% mutate(
+      sort_order = ifelse(is_selected, -1, dist),
+      color_val = case_when(
+        is_selected ~ "#337ab7", # Blue
+        current_price < target_price ~ "#5cb85c", # Green
+        current_price == target_price ~ "#337ab7", # Blue
+        current_price > target_price ~ "#d9534f" # Red
+      )
+    ) %>% arrange(sort_order, map_id, merchant_name)
+    
+    # Insert dummy row for 'dead space' between selected and the rest
+    spacer <- df[1, ]
+    spacer$merchant_name <- "   " # Spaces make it invisible but exist as a category
+    spacer$current_price <- 0
+    spacer$sort_order <- -0.5
+    spacer$color_val <- "rgba(0,0,0,0)"
+    
+    df_plot <- bind_rows(df %>% filter(is_selected), spacer, df %>% filter(!is_selected))
+    
+    # Lock in factor levels so Plotly respects our custom sort order
+    df_plot$merchant_name <- factor(df_plot$merchant_name, levels = df_plot$merchant_name)
+    
+    # Determine text color based on dark mode JS input
+    text_col <- ifelse(isTRUE(input$dark_mode), "#eeeeee", "#333333")
+    grid_col <- ifelse(isTRUE(input$dark_mode), "#555555", "#e5e5e5")
+    
+    plot_ly(df_plot, x = ~merchant_name, y = ~current_price, type = 'bar',
+            marker = list(color = ~color_val),
+            text = ~paste0("Map ", map_id, "<br>", current_price, "g<br>Dist: ", dist),
+            hoverinfo = "text+x") %>%
+      layout(
+        xaxis = list(title = "", tickangle = -45, tickfont = list(color = text_col, size = 10)),
+        yaxis = list(title = "Price (g)", tickfont = list(color = text_col), titlefont = list(color = text_col), gridcolor = grid_col),
+        paper_bgcolor = 'rgba(0,0,0,0)',
+        plot_bgcolor = 'rgba(0,0,0,0)',
+        margin = list(b = 130), # Give room for 45-degree labels
+        showlegend = FALSE
+      ) %>%
+      config(displayModeBar = FALSE) # Hide plotly tools for cleaner look
+  })
+  
+  # Render DataTable
+  output$market_table <- renderDT({
+    req(input$sel_map)
+    
+    # Safely prepare the data with a calculated difference column for styling
+    df <- market_data() %>%
+      filter(map_id == input$sel_map) %>%
+      mutate(Price_Diff = current_price - base_price) %>%
+      select(Merchant = merchant_name, Commodity = commodity, `Base Price` = base_price, `Current Price` = current_price, Price_Diff) %>%
+      arrange(Merchant, Commodity)
+    
+    datatable(df, 
+              options = list(
+                pageLength = 12, 
+                dom = 'tip',
+                columnDefs = list(list(visible = TRUE, targets = 4)) # Hide the Price_Diff column
+              ), 
+              rownames = FALSE) %>%
+      formatStyle('Current Price', 'Price_Diff', 
+                  color = styleInterval(c(-0.01, 0.01), c('green', 'black', 'red'))
+      )
+  })
+}
+
+shinyApp(ui, server)
